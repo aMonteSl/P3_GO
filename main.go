@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"sync"
 	"time"
 )
 
@@ -40,17 +39,18 @@ func newPlane(id int) Plane {
 }
 
 type Airport struct {
-	runways chan struct{}
-	gates   chan struct{}
-	queue   chan Plane
-	wg      sync.WaitGroup
+	runways    chan struct{}
+	gates      chan struct{}
+	queue      chan Plane
+	doneSignal chan struct{}
 }
 
-func newAirport(numRunways, numGates int) *Airport {
+func newAirport(numRunways, numGates int, numPlanes int) *Airport {
 	return &Airport{
-		runways: make(chan struct{}, numRunways),
-		gates:   make(chan struct{}, numGates),
-		queue:   make(chan Plane, maxQueueLength),
+		runways:    make(chan struct{}, numRunways),
+		gates:      make(chan struct{}, numGates),
+		queue:      make(chan Plane, maxQueueLength),
+		doneSignal: make(chan struct{}, numPlanes), // Track all planes
 	}
 }
 
@@ -66,8 +66,6 @@ func (a *Airport) handleGate(plane Plane) {
 }
 
 func (a *Airport) processPlane(plane Plane) {
-	defer a.wg.Done()
-
 	// Landing phase
 	a.runways <- struct{}{}
 	a.handleLanding(plane)
@@ -77,21 +75,23 @@ func (a *Airport) processPlane(plane Plane) {
 	a.gates <- struct{}{}
 	a.handleGate(plane)
 	<-a.gates
+
+	// Notify completion
+	a.doneSignal <- struct{}{}
 }
 
 func (a *Airport) start() {
 	for plane := range a.queue {
-		a.wg.Add(1)
 		go a.processPlane(plane)
 	}
 }
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	airport := newAirport(numRunways, numGates)
+	numPlanes := 30
+	airport := newAirport(numRunways, numGates, numPlanes)
 
 	// Randomized plane creation
-	numPlanes := 30
 	planes := make([]Plane, 0, numPlanes)
 	for i := 0; i < numPlanes; i++ {
 		planes = append(planes, newPlane(i+1))
@@ -111,7 +111,10 @@ func main() {
 	}
 	close(airport.queue)
 
-	// Wait for all planes to process
-	airport.wg.Wait()
+	// Wait for all planes to complete
+	for i := 0; i < numPlanes; i++ {
+		<-airport.doneSignal
+	}
+
 	fmt.Println("Simulation completed.")
 }
